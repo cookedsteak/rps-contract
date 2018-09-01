@@ -62,13 +62,19 @@ contract Game is Owned {
         require(gesture == ROCK || gesture == SCISSORS || gesture == PAPER);
         _;
     }
+    modifier needDebit() {
+        require(msg.value > 0);
+        _;
+    }
 
-    event StartGame(address _gamer, int8 gesture, uint gameId);
+    // event StartGame(address _gamer, int8 gesture, uint gameId);
+    event Betlog(address _bet, address _to, uint256 _value);
 
 
     function startGame(int8 gesture)
     public payable
     isValidGesture(gesture)
+    needDebit
     returns (uint) {
         // 随机匹配
         if (remainNum >= 5) {
@@ -82,6 +88,7 @@ contract Game is Owned {
                 }
                 if(j == random) {
                     // 匹配成功
+                    require(games[remainGames[j]].defender != msg.sender, "challenger & defender is same!");
                     games[remainGames[j]].challenger = msg.sender;
                     games[remainGames[j]].betPool = games[remainGames[j]].betPool.add(msg.value);
                     games[remainGames[j]].status = 1;
@@ -104,6 +111,7 @@ contract Game is Owned {
                 setGameMiaDefender(maxGame, gesture);
             }
             remainGames.push(maxGame);
+            return maxGame;
         }
     }
 
@@ -150,7 +158,7 @@ contract Game is Owned {
 
     function open(uint gameId) public {
         require(games[gameId].status == 1);
-
+        
     }
 
     function cancel(uint gameId) public {
