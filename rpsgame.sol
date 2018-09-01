@@ -62,20 +62,16 @@ contract Game is Owned {
         require(gesture == ROCK || gesture == SCISSORS || gesture == PAPER);
         _;
     }
-    modifier needDebit() {
-        require(msg.value > 0);
-        _;
-    }
 
     // event StartGame(address _gamer, int8 gesture, uint gameId);
     event Betlog(address _bet, address _to, uint256 _value);
 
 
     function startGame(int8 gesture)
-    public payable
     isValidGesture(gesture)
-    needDebit
+    public payable
     returns (uint) {
+        require(msg.value > 0, "Need mortgage");
         // 随机匹配
         if (remainNum >= 5) {
             randomNonce += 1;
@@ -88,13 +84,14 @@ contract Game is Owned {
                 }
                 if(j == random) {
                     // 匹配成功
-                    require(games[remainGames[j]].defender != msg.sender, "challenger & defender is same!");
+                    require(games[remainGames[j]].defender != msg.sender, "challenger & defender should not be same!");
                     games[remainGames[j]].challenger = msg.sender;
                     games[remainGames[j]].betPool = games[remainGames[j]].betPool.add(msg.value);
                     games[remainGames[j]].status = 1;
                     games[remainGames[j]].createdAt = now;
                     games[remainGames[j]].gameSupporter[msg.sender][msg.sender] = msg.value;
                     setGameMiaChallenger(remainGames[j], gesture);
+                    remainNum -= 1;
                     return remainGames[j];
                 }
                 j++;
@@ -133,7 +130,7 @@ contract Game is Owned {
 
     function battle(int8 a, int8 b) 
     isValidGesture(a) isValidGesture(b)
-    internal 
+    internal
     view returns(uint8) {
         int8 res = a - b;
         if (res == 0) {
@@ -156,8 +153,16 @@ contract Game is Owned {
         }
     }
 
-    function open(uint gameId) public {
+    function open(uint8 gameId) public {
         require(games[gameId].status == 1);
+        games[gameId].status = 2;
+        uint8 res = battle(gameMia[gameId].defenderGesture,gameMia[gameId].challengerGesture);
+        if (res == WIN) {
+            distribute(gameId, games[gameId].defender);
+        }
+    }
+
+    function distribute(uint8 gameId, address winner) public {
         
     }
 
