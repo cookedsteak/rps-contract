@@ -20,6 +20,7 @@ contract Owned {
 contract Game is Owned {
     using SafeMath for uint256;
     using SafeMath for uint8;
+    using SafeMath for uint;
 
     int8 constant ROCK = 2;
     int8 constant SCISSORS = 1;
@@ -35,9 +36,10 @@ contract Game is Owned {
     uint8 public maxGame = 0;
     uint8 public remainNum= 0;
     uint8 public betRate = 10;
-    uint256 public betMaximun = 5 ether;
+    uint256 public betMaximum = 5 ether;  //
+    uint256 public betMinimum = 1000 wei; //
 
-    uint8[] public remainGames;
+    uint8[] public remainGames; // 
 
     struct Game {
         uint createdAt;
@@ -46,6 +48,8 @@ contract Game is Owned {
         address challenger;
         uint8 status;// 0单人开局  1对局中  2完成
         uint256 betPool;
+        uint256 defenderPool;
+        uint256 challengerPool;
         mapping(address => mapping(address => uint256)) gameSupporter;
     }
 
@@ -66,13 +70,14 @@ contract Game is Owned {
     // event StartGame(address _gamer, int8 gesture, uint gameId);
     event Betlog(address _bet, address _to, uint256 _value);
 
-
+    // 随机参与，防止传输结果被爬取用于作弊
+    // 如果有匹配的局就加入，没有则自建
     function startGame(int8 gesture)
     isValidGesture(gesture)
     public payable
     returns (uint) {
-        require(msg.value > 0, "Need mortgage");
-        // 随机匹配
+        require(msg.value > betMinimum, "Need mortgage");
+        // 随机匹配，至少有5个活动局
         if (remainNum >= 5) {
             randomNonce += 1;
             uint random = uint(keccak256(now, msg.sender, randomNonce)) % remainNum;
@@ -85,14 +90,18 @@ contract Game is Owned {
                 if(j == random) {
                     // 匹配成功
                     require(games[remainGames[j]].defender != msg.sender, "challenger & defender should not be same!");
-                    games[remainGames[j]].challenger = msg.sender;
-                    games[remainGames[j]].betPool = games[remainGames[j]].betPool.add(msg.value);
-                    games[remainGames[j]].status = 1;
-                    games[remainGames[j]].createdAt = now;
-                    games[remainGames[j]].gameSupporter[msg.sender][msg.sender] = msg.value;
+                    game = games[remainGames[j]];
+                    game.challenger = msg.sender;
+                    game.betPool = game.betPool.add(msg.value);
+                    game.status = 1;
+                    game.createdAt = now;
+                    game.gameSupporter[msg.sender][msg.sender] = msg.value;
+                    game.challengerPool = game.challengerPool.add(msg.value);
                     setGameMiaChallenger(remainGames[j], gesture);
                     remainNum -= 1;
-                    return remainGames[j];
+                    uint8 finId = remainGames[j];
+                    delete remainGames[j];
+                    return finId;
                 }
                 j++;
             }
@@ -102,16 +111,16 @@ contract Game is Owned {
             remainNum += 1;
             Game storage game = games[maxGame];
             game.defender = msg.sender;
-            if (msg.value > 0) {
-                game.gameSupporter[msg.sender][msg.sender] = msg.value;
-                game.betPool = game.betPool.add(msg.value);
-                setGameMiaDefender(maxGame, gesture);
-            }
+            game.gameSupporter[msg.sender][msg.sender] = msg.value;
+            game.betPool = game.betPool.add(msg.value);
+            game.defenderPool = game.defenderPool.add(msg.value);
+            setGameMiaDefender(maxGame, gesture);
             remainGames.push(maxGame);
             return maxGame;
         }
     }
 
+    // 手势放入黑盒
     function setGameMiaDefender(uint8 gameId, int8 gesture) 
     internal
     returns (bool) {
@@ -124,10 +133,12 @@ contract Game is Owned {
         gameMia[gameId].challengerGesture = gesture;
     }
 
+    // 获取用户下注结果
     function getUserBet(uint8 gameId, address player) view public returns(uint) {
         return games[gameId].gameSupporter[player][msg.sender];
     }
 
+    // 结果比对
     function battle(int8 a, int8 b) 
     isValidGesture(a) isValidGesture(b)
     internal
@@ -144,42 +155,90 @@ contract Game is Owned {
         }
     }
 
+    // 其他人参与下注
     function bet(uint8 gameId, address player) payable public {
         require(games[gameId].status == 1);
+        require(now < games[gameId].createdAt + betTime);
         require(player == games[gameId].defender || player == games[gameId].challenger);
-        if (msg.value > 0) {
-            games[gameId].gameSupporter[player][msg.sender] += msg.value;
-            games[gameId].betPool = games[gameId].betPool.add(msg.value);
+        require(msg.value > betMinimum);
+    
+        games[gameId].gameSupporter[player][msg.sender] += msg.value;
+        games[gameId].betPool = games[gameId].betPool.add(msg.value);
+        if (player == games[gameId].defender){
+            games[gameId].defenderPool = games[gameId].defenderPool.add(msg.value);
+        } else {
+            games[gameId].challengerPool = games[gameId].challengerPool.add(msg.value);
         }
+        emit Betlog(msg.sender, player, msg.value);
     }
 
+    // 公布结果
     function open(uint8 gameId) public {
         require(games[gameId].status == 1);
         games[gameId].status = 2;
         uint8 res = battle(gameMia[gameId].defenderGesture,gameMia[gameId].challengerGesture);
         if (res == WIN) {
-            distribute(gameId, games[gameId].defender);
+            games[gameId].winner = games[gameId].defender;
+        } else if (res == LOSE) {
+            games[gameId].winner = games[gameId].challenger;
         }
     }
 
-    function distribute(uint8 gameId, address winner) public {
-        
+    // 主动获取奖励
+    function getReward(uint8 gameId, address betUser) public {
+        require(games[gameId].status == 2);
+        uint base;
+        if (games[gameId].winner == games[gameId].defender) {
+            base = games[gameId].defenderPool;
+        } else {
+            base = games[gameId].challengerPool;
+        }
+        if (betUser == games[gameId].winner &&
+        games[gameId].gameSupporter[betUser][msg.sender] > 0
+        ) {
+            uint origin = games[gameId].gameSupporter[betUser][msg.sender];
+            uint rerate = percent(origin, base, 3);
+            uint reward = games[gameId].betPool * rerate / 100;
+            if (reward > 0) {
+                msg.sender.transfer(reward);
+            }
+        }
     }
 
+    // 平局退款
+    function getRefund(uint8 gameId, address betUser) public {
+        require(games[gameId].status == 2);
+        if (games[gameId].winner == address(0)) {
+            uint reward = games[gameId].gameSupporter[betUser][msg.sender];
+            if (reward > 0) {
+                msg.sender.transfer(reward);
+            }
+        }
+    }
+
+    // 未开局前取消
     function cancel(uint gameId) public {
         require(games[gameId].status == 0);
         require(msg.sender == games[gameId].defender);
         // 取消并退款
         msg.sender.transfer(games[gameId].betPool);
+        remainNum -= 1;
+        for (uint i=0;i<remainGames.length;i++){
+            if (gameId == remainGames[i]) {
+                delete remainGames[i];
+                break;
+            }
+        }
         delete games[gameId];
-
     }
-
-    // function checkInfo(uint gameId) public returns(){
-    //     require(games[gameId].status == 2);
-    //     return gameMia[gameId];
-    // }
-
+    
+    // 比例计算
+    function percent(uint numerator, uint denominator, uint precision) public 
+    constant returns(uint) {
+        uint _numerator  = numerator * 10 ** (precision+1);
+        uint _quotient =  ((_numerator / denominator) + 5) / 10;
+        return ( _quotient);
+    }
 }
 
 
@@ -223,4 +282,5 @@ library SafeMath {
     function min256(uint256 a, uint256 b) internal pure returns (uint256) {
         return a < b ? a : b;
     }
+    
 }
