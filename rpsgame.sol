@@ -69,6 +69,7 @@ contract Game is Owned {
 
     // event StartGame(address _gamer, int8 gesture, uint gameId);
     event Betlog(address _bet, address _to, uint256 _value);
+    event Reward(address _bet, uint256 _value, uint256 _remain);
 
     // 随机参与，防止传输结果被爬取用于作弊
     // 如果有匹配的局就加入，没有则自建
@@ -78,7 +79,7 @@ contract Game is Owned {
     returns (uint) {
         require(msg.value > betMinimum, "Need mortgage");
         // 随机匹配，至少有5个活动局
-        if (remainNum >= 5) {
+        if (remainNum >= 1) {
             randomNonce += 1;
             uint random = uint(keccak256(now, msg.sender, randomNonce)) % remainNum;
             uint j = 0;
@@ -173,7 +174,7 @@ contract Game is Owned {
     }
 
     // 公布结果
-    function open(uint8 gameId) public {
+    function open(uint8 gameId) public returns(uint8){
         require(games[gameId].status == 1);
         games[gameId].status = 2;
         uint8 res = battle(gameMia[gameId].defenderGesture,gameMia[gameId].challengerGesture);
@@ -182,10 +183,21 @@ contract Game is Owned {
         } else if (res == LOSE) {
             games[gameId].winner = games[gameId].challenger;
         }
+        return res;
+    }
+
+    function getGesture(uint8 gameId, address player) public returns(int8){
+        require(games[gameId].status == 2);
+        
+        if (player == games[gameId].defender){
+            return gameMia[gameId].defenderGesture;
+        } else {
+            return gameMia[gameId].challengerGesture;
+        }
     }
 
     // 主动获取奖励
-    function getReward(uint8 gameId, address betUser) public {
+    function getReward(uint8 gameId, address betUser) public payable{
         require(games[gameId].status == 2);
         uint base;
         if (games[gameId].winner == games[gameId].defender) {
@@ -198,19 +210,20 @@ contract Game is Owned {
         ) {
             uint origin = games[gameId].gameSupporter[betUser][msg.sender];
             uint rerate = percent(origin, base, 3);
-            uint reward = games[gameId].betPool * rerate / 100;
-            if (reward > 0) {
+            uint reward = games[gameId].betPool * rerate / 1000;
+            emit Reward(msg.sender, reward, this.balance);
+            if (reward > 0 && reward <= this.balance) {
                 msg.sender.transfer(reward);
             }
         }
     }
 
     // 平局退款
-    function getRefund(uint8 gameId, address betUser) public {
+    function getRefund(uint8 gameId, address betUser) public payable{
         require(games[gameId].status == 2);
         if (games[gameId].winner == address(0)) {
             uint reward = games[gameId].gameSupporter[betUser][msg.sender];
-            if (reward > 0) {
+            if (reward > 0 && reward <= this.balance) {
                 msg.sender.transfer(reward);
             }
         }
